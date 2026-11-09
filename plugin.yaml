@@ -1,0 +1,36 @@
+name: afriradar
+version: "1.0.0"
+manifest_version: 2
+api_version: 1
+description: "African fund data for Hermes: every Nigerian collective investment scheme from SEC Nigeria's weekly report and every Kenyan unit trust scheme from CMA Kenya. Find, rank and compare funds, read a fund's yield history, project returns, and keep a watchlist that reports what changed each week."
+author: Rising Technology and Digital Trend
+license: MIT
+homepage: https://github.com/Risingtell/hermes-afriradar
+requires_hermes: ">=0.22.0"
+tags: [finance, nigeria, kenya, africa, investing, data]
+provides_tools:
+  - afriradar_market_overview
+  - afriradar_find_funds
+  - afriradar_top_funds
+  - afriradar_fund_detail
+  - afriradar_compare_funds
+  - afriradar_project_returns
+  - afriradar_watchlist
+  - afriradar_watch_report
+provides_hooks: []
+config_schema:
+  data_url:
+    type: str
+    default: "https://www.afriradar.com/data/"
+    label: "Data URL"
+    description: "Where the public AfriRadar CSV files are read from. Leave as is unless you mirror them."
+  cache_hours:
+    type: int
+    default: 6
+    label: "Cache hours"
+    description: "How long a downloaded report is reused before checking for a newer one (1 to 72)."
+  alert_bps:
+    type: int
+    default: 50
+    label: "Alert threshold (basis points)"
+    description: "A watched fund's yield move at least this big is flagged in the weekly report. 50 = 0.50 percentage points."
