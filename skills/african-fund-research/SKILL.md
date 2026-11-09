@@ -26,13 +26,14 @@ quarterly bulletin, as republished by AfriRadar.
 | "Cowry vs ARM vs Meristem" | `afriradar_compare_funds` |
 | "What will N1m become in a year?" / "N50k a month for 3 years" | `afriradar_project_returns` |
 | "I have N2m in X, keep an eye on it" | `afriradar_watchlist` action add, with amount |
-| "Anything new on my funds?" | `afriradar_watch_report` |
+| "Anything new on my funds?" | `afriradar_watch_report` (no mark_seen; only the weekly automation marks reports seen) |
 | Weekly reminders | suggest `/blueprint afriradar:weekly-fund-watch` |
 
 ## Rules for honest answers
 
-1. **Say what a yield is.** It is the year-to-date yield each fund manager reported to SEC for
-   that week, not a guaranteed return. For money market funds it is an annualised rate.
+1. **Say what a yield is.** For money market funds it is the annual rate each manager reported
+   to SEC that week, not a guaranteed return. For every other category SEC's figure is the
+   return since 1 January, so never quote it as a yearly rate.
 2. **Always name the week.** Every result has `week_ended`; say "for the week ended 23 October".
 3. **Compare like with like.** A money market yield and an equity fund's year-to-date return
    measure different things. The compare tool warns when categories differ: pass that on.

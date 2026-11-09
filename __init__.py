@@ -17,6 +17,7 @@ from .data import DataSource
 logger = logging.getLogger(__name__)
 
 PLUGIN = "afriradar"
+DEFAULT_DATA_URL = "https://www.afriradar.com/data/"
 
 _HANDLERS = {
     "afriradar_market_overview": tools.market_overview,
@@ -47,17 +48,14 @@ def _cache_dir() -> Path | None:
 
 
 class _LazyCacheSource(DataSource):
-    """Resolves the cache directory on first use instead of at registration, so register() does
-    no filesystem work and always picks the active profile's data directory."""
+    """Resolves the cache directory when a file is read, not at registration, so register() does
+    no filesystem work and the cache follows the active profile."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, cache_dir=None, **kwargs)
-        self._resolved = False
 
     def _paths(self, name):
-        if not self._resolved:
-            self.cache_dir = _cache_dir()
-            self._resolved = True
+        self.cache_dir = _cache_dir()  # every call, so a profile switch moves the cache with it
         return super()._paths(name)
 
 
@@ -72,7 +70,11 @@ def build_runtime(ctx) -> tools.Runtime:
         alert_bps = int(ctx.get_config("alert_bps", default=50) or 50)
     except (TypeError, ValueError):
         alert_bps = 50
-    source = _LazyCacheSource(data_url, cache_hours=cache_hours)
+    try:
+        source = _LazyCacheSource(data_url, cache_hours=cache_hours)
+    except ValueError:
+        logger.warning("afriradar: data_url %r is not an https:// URL; using %s", data_url, DEFAULT_DATA_URL)
+        source = _LazyCacheSource(DEFAULT_DATA_URL, cache_hours=cache_hours)
     store = tools.Store(lambda key, default=None: ctx.state.get(key, default=default),
                         lambda key, value: ctx.state.set(key, value))
     return tools.Runtime(source, store, alert_bps=alert_bps)
@@ -101,7 +103,7 @@ def _register_blueprints(ctx) -> None:
         category="weekly",
         schedule_template="{minute} {hour} * * {dow}",
         prompt_template=(
-            "Call afriradar_watch_report. If it says there is no new SEC report and no alerts, reply with "
+            "Call afriradar_watch_report with mark_seen true. If it says there is no new SEC report and no alerts, reply with "
             "one short line saying nothing changed and the week the data is from. Otherwise write a short "
             "message: alerts first (yield moves past the threshold, funds missing from the report), then "
             "one line per watched fund with its yield, the change in basis points and its rank. If a "

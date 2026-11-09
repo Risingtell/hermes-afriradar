@@ -231,7 +231,7 @@ def test_report_flags_a_yield_drop_and_lists_peers(runtime):
     items[0]["last_seen"]["week"] = "2026-10-16"
     items[0]["last_seen"]["yield"] = 0.1759  # pretend it paid 1.00pp more last week
     runtime.store.set("watchlist", items)
-    out = call(tools.watch_report, runtime)
+    out = call(tools.watch_report, runtime, mark_seen=True)  # what the weekly automation does
     row = out["funds"][0]
     assert out["new_report"] is True and row["alert"] is True and row["yield_change_bps"] == -100
     peers = row["higher_yielding_peers"]
@@ -306,3 +306,136 @@ def test_handler_through_registration_uses_state(monkeypatch, tmp_path):
     handler = ctx.tools["afriradar_watchlist"]["handler"]
     out = json.loads(handler({"action": "add", "fund": "AIICO money market"}, task_id="t1"))
     assert out["watching"] == 1 and ctx.state.data["watchlist"][0]["id"] == "money-market/aiico-money-market-fund"
+
+
+# -- review fixes -------------------------------------------------------------------------------
+
+def test_chat_report_does_not_use_up_the_weekly_changes(runtime):
+    call(tools.watchlist, runtime, action="add", fund="AIICO money market")
+    items = runtime.store.get("watchlist")
+    items[0]["last_seen"]["week"] = "2026-10-16"
+    runtime.store.set("watchlist", items)
+    assert call(tools.watch_report, runtime)["new_report"] is True          # a chat question
+    assert call(tools.watch_report, runtime, mark_seen=True)["new_report"] is True  # the automation still sees it
+
+
+def test_offline_backs_off_instead_of_retrying_every_call(tmp_path):
+    now = [1000.0]
+    data.DataSource("https://x.test/", tmp_path, cache_hours=1, fetcher=fixture_fetcher(),
+                    clock=lambda: now[0]).latest("money-market")
+    attempts = []
+
+    def down(url, headers):
+        attempts.append(url)
+        raise OSError("offline")
+
+    now[0] += 7200
+    source = data.DataSource("https://x.test/", tmp_path, cache_hours=1, fetcher=down, clock=lambda: now[0])
+    for _ in range(5):
+        source.latest("money-market")
+    assert len(attempts) == 1
+    now[0] += data.RETRY_AFTER + 1
+    source.latest("money-market")
+    assert len(attempts) == 2
+
+
+def test_fresh_install_offline_fails_fast_after_first_try(tmp_path):
+    attempts = []
+
+    def down(url, headers):
+        attempts.append(url)
+        raise OSError("offline")
+
+    source = data.DataSource("https://x.test/", tmp_path, fetcher=down)
+    for _ in range(3):
+        with pytest.raises(data.DataError):
+            source.latest("bond")
+    assert len(attempts) == 1
+
+
+def test_one_broken_category_does_not_break_lookups(tmp_path):
+    good = fixture_fetcher()
+
+    def flaky(url, headers):
+        if url.endswith("/ethical-funds.csv"):
+            return 404, {}, b"<html>not found</html>"
+        return good(url, headers)
+
+    source = data.DataSource("https://x.test/", tmp_path, fetcher=flaky)
+    rt = tools.Runtime(source, tools.Store(lambda k, d=None: d, lambda k, v: None))
+    out = call(tools.fund_detail, rt, fund="AIICO money market")
+    assert out["id"] == "money-market/aiico-money-market-fund"
+    assert out["unavailable_categories"] == ["ethical"]
+
+
+def test_kenya_id_gets_a_clear_message(runtime):
+    out = call(tools.fund_detail, runtime, fund="kenya/sanlam")
+    assert "quarterly" in out["error"]
+
+
+def test_slash_in_a_name_falls_back_to_name_search(runtime):
+    out = call(tools.fund_detail, runtime, fund="ARM/Money Market")
+    assert out["id"] == "money-market/arm-money-market-fund"
+
+
+def test_top_needs_a_word_boundary(runtime):
+    fake = data.parse_funds("week_ended,category,fund,yield_ytd,nav_ngn\n"
+                            "2026-10-23,money-market,Topaz Money Market Fund,0.18,2000000000\n")
+    runtime.source._memory.clear()
+    runtime.source.latest("money-market")  # warm, then splice the fake fund in
+    entry = runtime.source._memory["money-market-funds.csv"]
+    entry.parsed["rows"] = entry.parsed["rows"] + fake
+    assert commands.handle(runtime, "Topaz Money Market Fund").startswith("Topaz Money Market Fund")
+
+
+def test_non_money_market_projection_uses_a_year_of_unit_prices(runtime):
+    out = call(tools.project_returns, runtime, amount=1_000_000, months=12, fund="ARM Fixed Income Fund")
+    assert "unit price" in out["fund"]["rate_basis"] and "2025-10" in out["fund"]["rate_basis"]
+    # the rate is the annualised price move (8.5%), not SEC's year-to-date column (12.6%)
+    assert 8 < out["assumed_yield_pct"] < 9 and out["fund"]["yield_pct"] > 12
+
+
+def test_short_price_history_refuses_to_project(runtime):
+    # Cowry Eurobond has dollar prices only from May 2026: too short to annualise honestly.
+    out = call(tools.project_returns, runtime, amount=10_000, months=12, fund="Cowry Eurobond Fund")
+    assert "six months" in out["error"] or "26 weeks" in out["error"]
+
+
+def test_watch_report_values_a_non_money_market_holding_by_price(runtime):
+    call(tools.watchlist, runtime, action="add", fund="Afrinvest Equity Fund", amount=1_000_000)
+    items = runtime.store.get("watchlist")
+    price = items[0]["last_seen"]["price"]
+    assert price
+    items[0]["last_seen"]["price"] = price / 1.05  # pretend the price rose 5% since the last report
+    runtime.store.set("watchlist", items)
+    row = call(tools.watch_report, runtime)["funds"][0]
+    assert "income_at_this_yield" not in row
+    assert row["unit_price_change_pct"] == pytest.approx(5.0, abs=0.01)
+    assert row["your_value_change"]["amount"] == pytest.approx(50_000, rel=1e-3)
+
+
+def test_kenya_growth_sort_treats_zero_as_zero(runtime):
+    schemes = runtime.source.kenya()
+    schemes[0].change, schemes[1].change, schemes[2].change = 0.0, -0.05, None
+    order = [s["scheme"] for s in call(tools.top_funds, runtime, country="kenya", by="growth", limit=50)["funds"]]
+    assert order.index(schemes[0].name) < order.index(schemes[1].name) < order.index(schemes[2].name)
+
+
+def test_bad_data_url_falls_back_instead_of_breaking_the_plugin(monkeypatch, tmp_path):
+    import afriradar
+    monkeypatch.setattr(afriradar, "_cache_dir", lambda: tmp_path)
+    ctx = FakeCtx({"data_url": "http://localhost.evil.com/data/"})
+    afriradar.register(ctx)
+    assert len(ctx.tools) == 8
+
+
+@pytest.mark.parametrize("url,ok", [("https://www.afriradar.com/data/", True), ("http://localhost:8000/", True),
+                                    ("http://localhost.evil.com/", False), ("http://afriradar.com/", False),
+                                    ("ftp://x/", False)])
+def test_data_url_check(url, ok):
+    assert data.valid_data_url(url) is ok
+
+
+def test_kenya_slash_survives_blank_assets(runtime):
+    runtime.source.kenya()[0].aum_kes = None
+    assert "assets not reported" in commands.handle(runtime, "kenya") or "Kenya" in commands.handle(runtime, "kenya")

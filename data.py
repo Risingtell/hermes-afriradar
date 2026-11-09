@@ -20,6 +20,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +56,20 @@ CATEGORY_ALIASES = {
 
 class DataError(Exception):
     """A report could not be read and no saved copy exists."""
+
+
+RETRY_AFTER = 600  # after a failed download, wait this long before trying the network again
+
+
+def valid_data_url(url: str) -> bool:
+    """https anywhere, or plain http only to this machine (a local mirror)."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme == "https" and parts.hostname:
+        return True
+    return parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
 
 
 def slugify(name: str) -> str:
@@ -136,6 +151,16 @@ class Fund:
         if self.category == "dollar" and self.nav_usd is not None:
             return self.nav_usd
         return self.nav_ngn
+
+    @property
+    def unit_price(self) -> Optional[float]:
+        """What one unit is worth (bid, else offer), in dollars for dollar funds. None for money
+        market funds, whose price stays at N1 or N100 while the yield pays out."""
+        if self.category == "money-market":
+            return None
+        if self.category == "dollar":
+            return self.bid_usd or self.offer_usd or None
+        return self.bid_ngn or self.offer_ngn or None
 
     @property
     def url(self) -> str:
@@ -297,7 +322,7 @@ class DataSource:
 
     def __init__(self, base_url: str, cache_dir: Optional[Path], cache_hours: float = 6,
                  fetcher: Optional[Fetcher] = None, clock: Callable[[], float] = time.time):
-        if not base_url.startswith(("https://", "http://localhost", "http://127.0.0.1")):
+        if not valid_data_url(base_url):
             raise ValueError("data_url must be an https:// URL")
         self.base_url = base_url if base_url.endswith("/") else base_url + "/"
         self.cache_dir = cache_dir
@@ -309,6 +334,7 @@ class DataSource:
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
         self.stale: set[str] = set()
+        self._failed: dict[str, tuple[float, str]] = {}
 
     # -- raw files ---------------------------------------------------------------------------
     def _paths(self, name: str) -> tuple[Optional[Path], Optional[Path]]:
@@ -356,6 +382,9 @@ class DataSource:
         if entry is not None and now - entry.fetched_at < self.ttl:
             self._memory[name] = entry
             return entry
+        failed = self._failed.get(name)
+        if entry is None and failed and now - failed[0] < RETRY_AFTER:
+            raise DataError(failed[1])  # do not wait on the same dead network again for every call
         headers = {}
         if entry is not None:
             if entry.etag:
@@ -365,11 +394,8 @@ class DataSource:
         try:
             status, resp_headers, body = self.fetcher(self.base_url + name, headers)
         except Exception as exc:  # network down, DNS, timeout, 5xx
-            if entry is not None:
-                self.stale.add(name)
-                self._memory[name] = entry
-                return entry
-            raise DataError(f"Could not download {name}: {exc}") from exc
+            return self._fall_back(name, entry, now, f"Could not download {name}: {exc}")
+        self._failed.pop(name, None)
         self.stale.discard(name)
         lower = {k.lower(): v for k, v in resp_headers.items()}
         if status == 304 and entry is not None:
@@ -380,16 +406,23 @@ class DataSource:
         text = body.decode("utf-8-sig")
         if not text.lstrip().startswith(("week_ended", "quarter_ended")):
             # A 200 that is not our CSV (an HTML error page, a captive portal) must never replace data.
-            if entry is not None:
-                self.stale.add(name)
-                self._memory[name] = entry
-                return entry
-            raise DataError(f"{name} did not look like an AfriRadar CSV")
+            return self._fall_back(name, entry, now, f"{name} did not look like an AfriRadar CSV")
         fresh = _Cached(text=text, fetched_at=now, etag=lower.get("etag", ""),
                         last_modified=lower.get("last-modified", ""))
         self._memory[name] = fresh
         self._save_disk(name, fresh)
         return fresh
+
+    def _fall_back(self, name: str, entry: Optional[_Cached], now: float, message: str) -> _Cached:
+        """Serve the saved copy (marked stale) and hold off retrying for RETRY_AFTER seconds."""
+        self._failed[name] = (now, message)
+        if entry is None:
+            raise DataError(message)
+        self.stale.add(name)
+        # Pretend it was fetched so it is reused until RETRY_AFTER has passed, not refetched per call.
+        entry.fetched_at = max(entry.fetched_at, now - self.ttl + RETRY_AFTER)
+        self._memory[name] = entry
+        return entry
 
     def _parsed(self, name: str, parser: Callable[[str], list]) -> list:
         with self._lock(name):
@@ -406,14 +439,31 @@ class DataSource:
         return self._parsed(f"{CATEGORIES[category][0]}-history.csv", parse_funds)
 
     def all_latest(self) -> list[Fund]:
+        """Every category. A category that cannot be read is left out (and listed in
+        ``unavailable``) instead of failing lookups in the categories that did load."""
         from concurrent.futures import ThreadPoolExecutor
 
+        def one(category: str):
+            try:
+                return category, self.latest(category), None
+            except DataError as exc:
+                return category, [], exc
+
         with ThreadPoolExecutor(max_workers=5) as pool:
-            groups = list(pool.map(self.latest, CATEGORIES))
-        return [fund for group in groups for fund in group]
+            results = list(pool.map(one, CATEGORIES))
+        errors = [exc for _c, _f, exc in results if exc]
+        if len(errors) == len(results):
+            raise errors[0]
+        self.unavailable = {c for c, _f, exc in results if exc}
+        return [fund for _c, group, _e in results for fund in group]
 
     def kenya(self) -> list[KenyaScheme]:
         return self._parsed(f"{KENYA_STEM}.csv", parse_kenya)
+
+    unavailable: set = set()
+
+    def stale_names(self) -> list[str]:
+        return sorted(self.stale)
 
     def is_stale(self) -> bool:
         return bool(self.stale)

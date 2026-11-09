@@ -7,6 +7,7 @@ import difflib
 import json
 import re
 import statistics
+from datetime import date
 from typing import Any, Callable, Optional
 
 from .data import CATEGORIES, DataError, DataSource, Fund, normalize_category
@@ -38,8 +39,10 @@ class Runtime:
 def _ok(payload: dict, rt: Runtime) -> str:
     payload.setdefault("disclaimer", DISCLAIMER)
     if rt.source.is_stale():
-        payload["data_status"] = ("Could not reach afriradar.com; these figures come from the copy saved "
-                                  "on this machine and may be out of date.")
+        payload["data_status"] = ("Could not reach afriradar.com for " + ", ".join(rt.source.stale_names())
+                                  + "; those figures come from the copy saved on this machine and may be out of date.")
+    if getattr(rt.source, "unavailable", None):
+        payload["unavailable_categories"] = sorted(rt.source.unavailable)
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -121,10 +124,16 @@ def resolve_fund(rt: Runtime, ref: str, category: Optional[str] = None) -> tuple
     if not text:
         raise ValueError("Give a fund name or id")
     if "/" in text:
-        cat, _, slug = text.partition("/")
-        cat = normalize_category(cat) or ""
+        prefix, _, slug = text.partition("/")
+        if prefix.strip().lower() == "kenya":
+            raise ValueError("Kenyan schemes have no weekly fund detail; CMA publishes quarterly assets only. "
+                             "Use afriradar_top_funds or afriradar_market_overview with country kenya.")
+        try:
+            cat = normalize_category(prefix) or ""
+        except ValueError:
+            cat = ""  # "ARM/Meristem" and the like: fall through to the name search
         for fund in rt.source.latest(cat) if cat in CATEGORIES else []:
-            if fund.slug == slug:
+            if fund.slug == slug.strip().lower():
                 return fund, []
     pool = rt.source.latest(category) if category else rt.source.all_latest()
     wanted = _norm(text)
@@ -309,7 +318,8 @@ def top_funds(rt: Runtime, args: dict, **_) -> str:
     by = str(args.get("by") or "yield").strip().lower()
     if _country(args) == "kenya":
         schemes = rt.source.kenya()
-        key = (lambda s: -(s.change or -9)) if by in ("growth", "change") else (lambda s: -(s.aum_kes or 0))
+        key = ((lambda s: -s.change if s.change is not None else float("inf"))
+               if by in ("growth", "change") else (lambda s: -(s.aum_kes or 0)))
         return _ok({"market": "Kenya unit trust schemes", "by": "quarter growth" if by in ("growth", "change") else "assets",
                     "funds": [s.summary() for s in sorted(schemes, key=key)[:limit]]}, rt)
     category = normalize_category(args.get("category")) or "money-market"
@@ -329,6 +339,33 @@ def top_funds(rt: Runtime, args: dict, **_) -> str:
         "funds_considered": len(pool),
         "funds": [{"rank": i, **f.summary()} for i, f in enumerate(ordered[:limit], start=1)],
     }, rt)
+
+
+def _growth_rate(rt: Runtime, fund: Fund) -> tuple[Optional[float], str]:
+    """(yearly rate, how it was worked out) for projecting a fund forward.
+
+    Money market funds: the yield the manager reports, which is an annual rate. Every other
+    category: SEC's year-to-date column is the return since 1 January, not a yearly rate, so the
+    rate comes from the fund's own unit price over the last year of weekly reports (at least six
+    months, because a few weeks of prices swing too much), annualised.
+    """
+    if fund.category == "money-market":
+        if fund.reported_yield is None:
+            return None, "the manager reported no yield to SEC this week."
+        return fund.reported_yield, "the yield reported to SEC this week (an annual rate for money market funds)"
+    rows = [r for r in _series(rt, fund, 53) if r.unit_price]
+    if len(rows) < 26 or not fund.unit_price:
+        return None, ("fewer than 26 weeks of unit prices on file; a shorter run of prices is too "
+                      "noisy to turn into a yearly rate. Ask the user for a yield_pct to assume.")
+    first, last = rows[0], rows[-1]
+    days = (date.fromisoformat(last.week) - date.fromisoformat(first.week)).days
+    if days < 182:
+        return None, ("less than six months of unit prices on file; a shorter run of prices is too "
+                      "noisy to turn into a yearly rate. Ask the user for a yield_pct to assume.")
+    growth = last.unit_price / first.unit_price
+    rate = growth ** (365 / days) - 1
+    return rate, (f"the unit price moved {(growth - 1) * 100:+.2f}% from {first.week} to {last.week}, "
+                  f"annualised; past price moves do not repeat on schedule")
 
 
 def _series(rt: Runtime, fund: Fund, weeks: int) -> list[Fund]:
@@ -415,10 +452,11 @@ def project_returns(rt: Runtime, args: dict, **_) -> str:
         fund, candidates = resolve_fund(rt, args["fund"])
         if not fund:
             return _not_found(args["fund"], candidates)
-        if fund.reported_yield is None:
-            return _err(f"{fund.name} reported no yield to SEC this week, so there is nothing to project from.")
-        rate_pct = fund.reported_yield * 100
-        fund_info = fund.summary()
+        rate, basis = _growth_rate(rt, fund)
+        if rate is None:
+            return _err(f"Not enough data to project {fund.name}: {basis}")
+        rate_pct = rate * 100
+        fund_info = {**fund.summary(), "rate_basis": basis}
     if rate_pct is None:
         raise ValueError("Give a fund or a yield_pct")
     if not -50 <= rate_pct <= 150:
@@ -455,7 +493,8 @@ def _watchlist(rt: Runtime) -> list[dict]:
 def _snapshot(fund: Fund, peers: list[Fund]) -> dict:
     rank = _rank_of(fund, peers)
     return {"week": fund.week, "yield": fund.reported_yield, "nav_ngn": fund.nav_ngn,
-            "unitholders": fund.unitholders, "rank": rank["position"] if rank else None}
+            "unitholders": fund.unitholders, "rank": rank["position"] if rank else None,
+            "price": fund.unit_price}
 
 
 @_safe
@@ -524,7 +563,8 @@ def watch_report(rt: Runtime, args: dict, **_) -> str:
     if not items:
         return _ok({"watching": 0, "message": "The watchlist is empty. Add a fund with afriradar_watchlist "
                                                "(action add) first."}, rt)
-    mark_seen = args.get("mark_seen", True) not in (False, "false", "no", 0)
+    # Default False: a question in chat must not use up the changes the weekly automation reports.
+    mark_seen = args.get("mark_seen", False) in (True, "true", "yes", 1)
     threshold = rt.alert_bps
     lines, alerts, new_week = [], 0, False
     for item in items:
@@ -561,11 +601,18 @@ def watch_report(rt: Runtime, args: dict, **_) -> str:
             "higher_yielding_peers": _alternatives(fund, peers) if flagged and change_bps < 0 else None,
             "url": fund.url,
         }
-        if item.get("amount") and fund.reported_yield:
-            yearly = item["amount"] * fund.reported_yield
+        if item.get("amount"):
             row["your_amount"] = item["amount"]
-            row["income_at_this_yield"] = {"per_year": round(yearly, 2), "per_month": round(yearly / 12, 2),
-                                           "currency": item.get("currency", "NGN")}
+            if fund.category == "money-market" and fund.reported_yield:
+                yearly = item["amount"] * fund.reported_yield
+                row["income_at_this_yield"] = {"per_year": round(yearly, 2), "per_month": round(yearly / 12, 2),
+                                               "currency": item.get("currency", "NGN")}
+            elif fund.unit_price and last.get("price"):
+                moved = fund.unit_price / last["price"] - 1
+                row["unit_price_change_pct"] = round(moved * 100, 2)
+                row["your_value_change"] = {"amount": round(item["amount"] * moved, 2),
+                                            "currency": item.get("currency", "NGN"),
+                                            "basis": f"unit price {last.get('week')} to {fund.week}"}
         lines.append({k: v for k, v in row.items() if v is not None})
         if mark_seen:
             item["last_seen"] = _snapshot(fund, peers)

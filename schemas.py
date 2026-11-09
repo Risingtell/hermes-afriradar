@@ -108,8 +108,9 @@ PROJECT_RETURNS = {
     "name": "afriradar_project_returns",
     "description": (
         "Arithmetic for 'what would N500k in this fund be worth in a year' or 'if I save N50k a month': "
-        "projects a balance from a fund's current reported yield (or a yield you give), compounded "
-        "monthly, with an optional monthly contribution. Always use this instead of doing the maths "
+        "projects a balance compounded monthly, with an optional monthly contribution. The rate is the "
+        "reported yield for money market funds, the fund's annualised unit-price growth over the last "
+        "year for other funds (rate_basis says which), or a yield_pct you give. Always use this instead of doing the maths "
         "yourself, and say the yield is assumed constant."
     ),
     "parameters": {
@@ -149,14 +150,15 @@ WATCH_REPORT = {
     "description": (
         "What changed for every watched fund since the last report: new SEC week or not, yield change in "
         "basis points with an alert when it moves past the user's threshold, rank movement, fund size "
-        "change, the user's income at the new yield, and higher-yielding peers when a yield drops. "
-        "By default it records this report as seen, so the next one only shows what is new; pass "
-        "mark_seen false to peek."
+        "change, the user's income at the new yield (money market) or the change in value of their "
+        "holding (other funds), and higher-yielding peers when a yield drops. In chat, call it without "
+        "mark_seen. Only the scheduled weekly report passes mark_seen true, which records this report so "
+        "the next one shows only what is new."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "mark_seen": {"type": "boolean", "description": "Record this report as seen (default true)."},
+            "mark_seen": {"type": "boolean", "description": "Record this report as seen. Default false; the weekly automation sets it true."},
         },
     },
 }

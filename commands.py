@@ -99,6 +99,11 @@ def _watch(rt) -> str:
         income = fund.get("income_at_this_yield")
         if income and income.get("currency") == "NGN":
             lines.append(f"  your {_naira(fund['your_amount'])} earns about {_naira(income['per_month'])} a month at this yield")
+        value = fund.get("your_value_change")
+        if value and value.get("currency") == "NGN":
+            sign = "+" if value["amount"] >= 0 else "-"
+            lines.append(f"  your {_naira(fund['your_amount'])} moved {sign}{_naira(abs(value['amount']))} "
+                         f"({fund['unit_price_change_pct']:+.2f}% unit price)")
     return "\n".join(lines)
 
 
@@ -120,6 +125,9 @@ def _kenya(rt) -> str:
         return data["error"]
     lines = ["Kenya unit trust schemes by assets (CMA quarterly bulletin):"]
     for i, scheme in enumerate(data["funds"], start=1):
+        if scheme.get("aum_kes") is None:
+            lines.append(f"{i:>2}. {scheme['scheme']}  assets not reported")
+            continue
         lines.append(f"{i:>2}. {scheme['scheme']}  KES {scheme['aum_kes'] / 1e9:,.1f}bn  "
                      f"({scheme['quarter_change_pct']:+.1f}% on the quarter)" if scheme.get("quarter_change_pct") is not None
                      else f"{i:>2}. {scheme['scheme']}  KES {scheme['aum_kes'] / 1e9:,.1f}bn")
@@ -140,7 +148,7 @@ def handle(rt, raw_args: str) -> str:
             return _market(rt)
         if lower in ("kenya", "ke"):
             return _kenya(rt)
-        if lower.startswith("top"):
+        if lower == "top" or lower.startswith("top "):
             rest = text[3:].strip()
             return _top(rt, normalize_category(rest) or "money-market", 10)
         return _fund(rt, text)
