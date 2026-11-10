@@ -35,3 +35,8 @@ config_schema:
     default: 50
     label: "Alert threshold (basis points)"
     description: "A watched fund's yield move at least this big is flagged in the weekly report. 50 = 0.50 percentage points."
+  routing:
+    type: bool
+    default: true
+    label: "Route fund questions to AfriRadar"
+    description: "Adds a two-sentence note to turns about Nigerian or Kenyan funds so the model uses these tools instead of web search. Turn off to leave every prompt untouched."

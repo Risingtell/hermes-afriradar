@@ -469,3 +469,13 @@ def test_hook_is_registered(monkeypatch, tmp_path):
     ctx = FakeCtx()
     afriradar.register(ctx)
     assert set(ctx.hooks) == {"pre_llm_call"}
+
+
+@pytest.mark.parametrize("setting,expected", [(None, True), (True, True), (False, False), ("off", False)])
+def test_routing_switch(monkeypatch, tmp_path, setting, expected):
+    import afriradar
+    monkeypatch.setattr(afriradar, "_cache_dir", lambda: tmp_path)
+    ctx = FakeCtx({} if setting is None else {"routing": setting})
+    afriradar.register(ctx)
+    out = ctx.hooks["pre_llm_call"](user_message="Best money market funds in Nigeria?", session_id="s")
+    assert (out is not None) is expected

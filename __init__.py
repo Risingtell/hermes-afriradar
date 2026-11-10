@@ -140,6 +140,17 @@ def _register_blueprints(ctx) -> None:
     )
 
 
+def _route_if_enabled(ctx, **kwargs):
+    """Read the switch on every turn, so turning it off in settings takes effect at once."""
+    try:
+        enabled = ctx.get_config("routing", default=True)
+    except Exception:
+        enabled = True
+    if enabled is False or str(enabled).strip().lower() in ("false", "0", "no", "off"):
+        return None
+    return routing.route(**kwargs)
+
+
 def register(ctx) -> None:
     runtime = build_runtime(ctx)
     for schema in schemas.ALL:
@@ -153,6 +164,6 @@ def register(ctx) -> None:
         PLUGIN, lambda raw_args="", **_: commands.handle(runtime, raw_args),
         description="African fund data: top funds, one fund, your watchlist", args_hint="[fund | top <category> | watch | market | kenya | help]",
     )
-    ctx.register_hook("pre_llm_call", routing.route)
+    ctx.register_hook("pre_llm_call", partial(_route_if_enabled, ctx))
     _register_skills(ctx)
     _register_blueprints(ctx)

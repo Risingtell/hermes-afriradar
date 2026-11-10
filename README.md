@@ -10,6 +10,9 @@ Nigeria's website. This plugin gives Hermes that record, every week since Januar
 [AfriRadar](https://www.afriradar.com), which republishes SEC Nigeria's weekly valuation report and
 CMA Kenya's quarterly unit trust bulletin as clean CSV.
 
+Nigeria is the first case. The same pattern works for any regulator that publishes its figures as
+a spreadsheet: clean the file once, and an agent can rank, project and watch it for its user.
+
 A real session (Hermes on NVIDIA's free Nemotron model, 10 Nov 2026; tool calls from Hermes'
 own log):
 
@@ -75,7 +78,7 @@ which week, say what a yield is, compare like with like, never do the maths in y
 sentences to that turn pointing the model at the AfriRadar tools. Without it, a model that also
 has web search tends to search, land on an older week on some aggregator, and do the compounding
 in its head; with it, the same question gets SEC's latest week and the tool's arithmetic. Other
-turns are untouched.
+turns are untouched, and the `routing` setting turns it off.
 
 ## Install
 
@@ -103,6 +106,7 @@ Settings, Plugins, AfriRadar:
 | `data_url` | `https://www.afriradar.com/data/` | Where the CSV files are read from |
 | `cache_hours` | `6` | How long a downloaded report is reused before asking for a newer one |
 | `alert_bps` | `50` | A watched fund's yield move at least this big is flagged (50 = 0.50 points) |
+| `routing` | `true` | Add the two-sentence routing note to turns about Nigerian or Kenyan funds |
 
 ## How it works
 
@@ -115,6 +119,9 @@ Settings, Plugins, AfriRadar:
   revalidated with ETags after `cache_hours`, so an unchanged report costs a few hundred bytes.
   With no connection the saved copy is used and every answer says so. An HTML page served in
   place of a CSV (a captive Wi-Fi portal) never replaces good data.
+- **Freshness.** AfriRadar checks SEC's page every day and publishes a new week the day SEC posts
+  it. SEC does not post every Friday: in November 2026 its newest report was still the week ended
+  23 October. Every answer names the week, so a gap is visible rather than hidden.
 - **Yields.** The year-to-date column each manager reports to SEC, exactly as AfriRadar shows it.
   A zero means "not reported". A figure SEC printed that cannot be real is not shown.
 - **Projections.** For money market funds the reported yield is an annual rate, so it is used as
@@ -135,7 +142,7 @@ Settings, Plugins, AfriRadar:
   your machine.
 - **Hook:** one `pre_llm_call` hook. It reads only the current user message and, when that message
   is about Nigerian or Kenyan funds, appends a fixed two-sentence note to the turn. No network
-  call, no storage.
+  call, no storage. Off with `routing: false`.
 - No shell commands, no background processes, no credentials, no telemetry.
 
 ## Not investment advice
