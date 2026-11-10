@@ -1,21 +1,48 @@
 # AfriRadar for Hermes
 
+![AfriRadar for Hermes](docs/banner.png)
+
 Ask Hermes about Nigerian mutual funds and Kenyan unit trusts, and let it watch the funds you hold.
 
-1.65 million Nigerians hold units in money market and other collective investment schemes worth
-N10.1 trillion. The only official record of how those funds perform is a weekly Excel file on SEC
+Nigeria's 218 collective investment schemes hold N10.1 trillion across 1.65 million unitholder
+accounts. The only official record of how those funds perform is a weekly Excel file on SEC
 Nigeria's website. This plugin gives Hermes that record, every week since January 2025, through
 [AfriRadar](https://www.afriradar.com), which republishes SEC Nigeria's weekly valuation report and
 CMA Kenya's quarterly unit trust bulletin as clean CSV.
 
+A real session (Hermes on NVIDIA's free Nemotron model, 10 Nov 2026; tool calls from Hermes'
+own log):
+
 ```
-You:     I have N2m in Coronation money market fund. Watch it and tell me every Saturday what changed.
-Hermes:  Added Coronation Money Market Fund (20.36%, rank 2 of 50 money market funds, week ended
-         23 Oct). At that yield your N2m earns about N33,900 a month. I've scheduled the
-         Weekly fund watch for Saturdays at 09:00 on this chat.
+› I have N2m in Coronation money market fund. Watch it for me and tell me what it earns a month.
+  ⚙ afriradar_find_funds 0.04s · afriradar_watchlist 0.04s · afriradar_watchlist 0.06s · afriradar_project_returns 0.04s
+
+Done. Your N2m in the Coronation Money Market Fund is now on your watchlist.
+Current figures (SEC report, week ended 2026-10-23):
+- Yield: 20.36% p.a. ... ranked 2nd in the money-market category
+Monthly earnings on N2m at that yield (compounded monthly, assumed constant):
+- About ₦31,126 per month
+```
+
+And what `/blueprint afriradar:weekly-fund-watch` sends, fired through Hermes' cron with the
+watchlist last seen at SEC's 16 October report:
+
+```
+Alert: Stanbic IBTC Money Market Fund rose 77 bps (to 17.14%), past the 50 bps alert threshold;
+rank moved up from 34 to 25 of 50.
+
+• Coronation Money Market Fund: 20.36%, +33 bps, rank 2 of 50 (was 4). On N2,000,000 that is N407,200 per year.
+• Stanbic IBTC Money Market Fund: 17.14%, +77 bps (alert), rank 25 of 50 (was 34). On N750,000 that is N128,550 per year.
+
+Data from SEC Nigeria via AfriRadar, not investment advice.
 ```
 
 No API key, no account, no payment. Data is read from public files and cached on your machine.
+
+| | |
+|---|---|
+| ![Top funds](docs/1-top-funds.png) | ![Watch a fund](docs/2-watch.png) |
+| ![Project returns](docs/3-project.png) | ![/afriradar](docs/4-slash.png) |
 
 ## What it adds
 
@@ -43,6 +70,12 @@ you pick.
 
 **A bundled skill**, `afriradar:african-fund-research`, with the rules for honest answers: say
 which week, say what a yield is, compare like with like, never do the maths in your head, no advice.
+
+**A routing hook** (`pre_llm_call`). When a message is about Nigerian or Kenyan funds, it adds two
+sentences to that turn pointing the model at the AfriRadar tools. Without it, a model that also
+has web search tends to search, land on an older week on some aggregator, and do the compounding
+in its head; with it, the same question gets SEC's latest week and the tool's arithmetic. Other
+turns are untouched.
 
 ## Install
 
@@ -84,6 +117,10 @@ Settings, Plugins, AfriRadar:
   place of a CSV (a captive Wi-Fi portal) never replaces good data.
 - **Yields.** The year-to-date column each manager reports to SEC, exactly as AfriRadar shows it.
   A zero means "not reported". A figure SEC printed that cannot be real is not shown.
+- **Projections.** For money market funds the reported yield is an annual rate, so it is used as
+  is. For every other category SEC's figure is the return since 1 January, so projections and
+  holding values use the fund's own unit price instead, annualised over at least six months of
+  weekly reports; with less history the tool says so and asks for a rate.
 - **Fund names.** People say "Chapel Hill MMF" or "coronaton money market". Matching weighs the
   distinctive words (the manager's brand) above words half the funds share, so "Cowry money
   market" offers Cowry's four funds, not fifty money market funds.
@@ -96,7 +133,10 @@ Settings, Plugins, AfriRadar:
 - **Files written:** cached CSVs under `<hermes home>/plugin-data/afriradar/cache/`; the
   watchlist (fund ids, optional amounts and notes) in the plugin's Hermes state. Nothing leaves
   your machine.
-- No shell commands, no background processes, no credentials, no telemetry, no hooks.
+- **Hook:** one `pre_llm_call` hook. It reads only the current user message and, when that message
+  is about Nigerian or Kenyan funds, appends a fixed two-sentence note to the turn. No network
+  call, no storage.
+- No shell commands, no background processes, no credentials, no telemetry.
 
 ## Not investment advice
 
