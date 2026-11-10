@@ -17,7 +17,8 @@ provides_tools:
   - afriradar_project_returns
   - afriradar_watchlist
   - afriradar_watch_report
-provides_hooks: []
+provides_hooks:
+  - pre_llm_call
 config_schema:
   data_url:
     type: str

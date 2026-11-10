@@ -439,3 +439,33 @@ def test_data_url_check(url, ok):
 def test_kenya_slash_survives_blank_assets(runtime):
     runtime.source.kenya()[0].aum_kes = None
     assert "assets not reported" in commands.handle(runtime, "kenya") or "Kenya" in commands.handle(runtime, "kenya")
+
+
+def test_watch_income_matches_project_returns(runtime):
+    call(tools.watchlist, runtime, action="add", fund="AIICO money market", amount=2_000_000)
+    monthly = call(tools.watch_report, runtime)["funds"][0]["income_at_this_yield"]["per_month"]
+    one_month = call(tools.project_returns, runtime, amount=2_000_000, months=1, fund="AIICO money market")
+    assert monthly == pytest.approx(one_month["estimated_earnings"], abs=0.01)
+
+
+@pytest.mark.parametrize("message,routed", [
+    ("If I save N50k a month in Chapel Hill Denham MMF for 3 years, what do I end up with?", True),
+    ("What are the best money market funds in Nigeria?", True),
+    ("Compare Stanbic IBTC, ARM and Coronation money market funds", True),
+    ("How big are Kenya's unit trusts?", True),
+    ("Is the Cowry eurobond fund doing well?", True),
+    ("Write me a Python function to sort a list", False),
+    ("What's the weather in Lagos today?", False),
+    ("Explain how index funds work in the US", False),
+])
+def test_routing_hook(message, routed):
+    from afriradar import routing
+    assert (routing.route(user_message=message) is not None) is routed
+
+
+def test_hook_is_registered(monkeypatch, tmp_path):
+    import afriradar
+    monkeypatch.setattr(afriradar, "_cache_dir", lambda: tmp_path)
+    ctx = FakeCtx()
+    afriradar.register(ctx)
+    assert set(ctx.hooks) == {"pre_llm_call"}

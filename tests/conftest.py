@@ -50,7 +50,7 @@ class FakeCtx:
     def __init__(self, config=None):
         self.config = config or {}
         self.state = FakeState()
-        self.tools, self.commands, self.skills, self.blueprints = {}, {}, {}, {}
+        self.tools, self.commands, self.skills, self.blueprints, self.hooks = {}, {}, {}, {}, {}
 
     def get_config(self, key, default=None):
         return self.config.get(key, default)
@@ -60,6 +60,9 @@ class FakeCtx:
 
     def register_command(self, name, handler, **kw):
         self.commands[name] = handler
+
+    def register_hook(self, name, callback, **kw):
+        self.hooks[name] = callback
 
     def register_skill(self, name, path):
         self.skills[name] = path

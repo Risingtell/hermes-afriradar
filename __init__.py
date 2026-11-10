@@ -11,7 +11,7 @@ import logging
 from functools import partial
 from pathlib import Path
 
-from . import commands, schemas, tools
+from . import commands, routing, schemas, tools
 from .data import DataSource
 
 logger = logging.getLogger(__name__)
@@ -153,5 +153,6 @@ def register(ctx) -> None:
         PLUGIN, lambda raw_args="", **_: commands.handle(runtime, raw_args),
         description="African fund data: top funds, one fund, your watchlist", args_hint="[fund | top <category> | watch | market | kenya | help]",
     )
+    ctx.register_hook("pre_llm_call", routing.route)
     _register_skills(ctx)
     _register_blueprints(ctx)

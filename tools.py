@@ -604,9 +604,12 @@ def watch_report(rt: Runtime, args: dict, **_) -> str:
         if item.get("amount"):
             row["your_amount"] = item["amount"]
             if fund.category == "money-market" and fund.reported_yield:
+                # The same monthly compounding afriradar_project_returns uses, so the two always agree.
                 yearly = item["amount"] * fund.reported_yield
-                row["income_at_this_yield"] = {"per_year": round(yearly, 2), "per_month": round(yearly / 12, 2),
-                                               "currency": item.get("currency", "NGN")}
+                monthly = item["amount"] * ((1 + fund.reported_yield) ** (1 / 12) - 1)
+                row["income_at_this_yield"] = {"per_year": round(yearly, 2), "per_month": round(monthly, 2),
+                                               "currency": item.get("currency", "NGN"),
+                                               "basis": "yield held constant, compounded monthly, before fees and tax"}
             elif fund.unit_price and last.get("price"):
                 moved = fund.unit_price / last["price"] - 1
                 row["unit_price_change_pct"] = round(moved * 100, 2)
